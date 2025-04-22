@@ -3,108 +3,154 @@
 #include <cstring>
 #include <sstream>
 #include <iomanip>
+#include <netinet/in.h>
 
 namespace libuv_net {
 
-Session::Session(uv_loop_t* loop, uv_tcp_t* client)
-    : loop_(loop), client_(client) {
-    
-    // Generate unique session ID
+Session::Session(uv_loop_t* loop) : loop_(loop) {
+    // 初始化套接字
+    uv_tcp_init(loop_, &socket_);
+    socket_.data = this;
+
+    // 生成会话ID
     std::stringstream ss;
-    ss << std::hex << std::setfill('0') << std::setw(16) 
+    ss << std::hex << std::setw(8) << std::setfill('0') 
+       << reinterpret_cast<uintptr_t>(this);
+    id_ = ss.str();
+}
+
+Session::Session(uv_loop_t* loop, uv_tcp_t* client) 
+    : loop_(loop) {
+    // 初始化套接字
+    uv_tcp_init(loop_, &socket_);
+    socket_.data = this;
+
+    // 生成会话ID
+    std::stringstream ss;
+    ss << std::hex << std::setw(8) << std::setfill('0') 
        << reinterpret_cast<uintptr_t>(this);
     id_ = ss.str();
 
-    // Get remote address and port
+    // 接受客户端连接
+    uv_accept(reinterpret_cast<uv_stream_t*>(client), 
+              reinterpret_cast<uv_stream_t*>(&socket_));
+
+    // 获取远程地址信息
     struct sockaddr_storage addr;
     int addr_len = sizeof(addr);
-    uv_tcp_getpeername(client_, (struct sockaddr*)&addr, &addr_len);
+    uv_tcp_getpeername(&socket_, reinterpret_cast<struct sockaddr*>(&addr), &addr_len);
 
     char ip[INET6_ADDRSTRLEN];
     if (addr.ss_family == AF_INET) {
-        struct sockaddr_in* s = (struct sockaddr_in*)&addr;
+        struct sockaddr_in* s = reinterpret_cast<struct sockaddr_in*>(&addr);
         uv_inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip));
         remote_port_ = ntohs(s->sin_port);
     } else {
-        struct sockaddr_in6* s = (struct sockaddr_in6*)&addr;
+        struct sockaddr_in6* s = reinterpret_cast<struct sockaddr_in6*>(&addr);
         uv_inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof(ip));
         remote_port_ = ntohs(s->sin6_port);
     }
     remote_address_ = ip;
 
-    spdlog::info("New session created: {} ({}:{})", id_, remote_address_, remote_port_);
+    spdlog::info("新会话已创建: {} ({}:{})", id_, remote_address_, remote_port_);
 }
 
 Session::~Session() {
-    stop();
-    spdlog::info("Session destroyed: {}", id_);
+    if (!is_closing_) {
+        close();
+    }
 }
 
-void Session::start() {
-    uv_read_start((uv_stream_t*)client_, alloc_buffer, on_read);
+int Session::start_read() {
+    if (is_closing_) {
+        return UV_EBUSY;
+    }
+
+    int result = uv_read_start(reinterpret_cast<uv_stream_t*>(&socket_),
+                              on_alloc,
+                              on_read);
+    if (result) {
+        spdlog::error("开始读取失败: {}", uv_strerror(result));
+    }
+    return result;
 }
 
 void Session::stop() {
-    if (!is_closing_) {
+    uv_read_stop(reinterpret_cast<uv_stream_t*>(&socket_));
+}
+
+void Session::close() {
+    if (!is_closing_ && !uv_is_closing(reinterpret_cast<uv_handle_t*>(&socket_))) {
         is_closing_ = true;
-        uv_close((uv_handle_t*)client_, on_close);
+        uv_close(reinterpret_cast<uv_handle_t*>(&socket_), on_close);
     }
 }
 
 void Session::send(std::shared_ptr<Message> message) {
     if (is_closing_) {
-        spdlog::warn("Attempt to send message on closing session: {}", id_);
         return;
     }
 
-    auto buffer = message->serialize();
+    // 序列化消息
+    auto data = message->serialize();
     auto write_req = new uv_write_t;
-    auto buf = new uv_buf_t;
-    buf->base = new char[buffer.size()];
-    buf->len = buffer.size();
-    std::copy(buffer.begin(), buffer.end(), buf->base);
-
     write_req->data = this;
-    uv_write(write_req, (uv_stream_t*)client_, buf, 1, on_write);
+
+    // 创建缓冲区
+    uv_buf_t buf = uv_buf_init(reinterpret_cast<char*>(data.data()), data.size());
+
+    // 发送数据
+    int result = uv_write(write_req, 
+                         reinterpret_cast<uv_stream_t*>(&socket_), 
+                         &buf, 1, on_write);
+    if (result) {
+        spdlog::error("发送失败: {}", uv_strerror(result));
+        delete write_req;
+    }
 }
 
-void Session::alloc_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
+void Session::on_alloc(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
     auto session = static_cast<Session*>(handle->data);
-    session->read_buffer_.resize(suggested_size);
-    buf->base = reinterpret_cast<char*>(session->read_buffer_.data());
-    buf->len = session->read_buffer_.size();
+    if (session->alloc_callback_) {
+        *buf = session->alloc_callback_(suggested_size);
+    } else {
+        *buf = uv_buf_init(new char[suggested_size], suggested_size);
+    }
 }
 
 void Session::on_read(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     auto session = static_cast<Session*>(stream->data);
-    
+
     if (nread < 0) {
         if (nread != UV_EOF) {
-            spdlog::error("Read error on session {}: {}", session->id_, uv_strerror(nread));
+            spdlog::error("读取错误: {}", uv_strerror(nread));
         }
-        session->stop();
+        session->close();
         return;
     }
 
-    if (nread > 0) {
-        session->message_buffer_.insert(session->message_buffer_.end(),
-                                      buf->base,
-                                      buf->base + nread);
-        session->process_buffer();
+    if (nread == 0) {
+        return;
     }
+
+    // 处理接收到的数据
+    if (session->read_handler_) {
+        session->read_handler_(nread, buf);
+    } else {
+        session->append_to_buffer(buf->base, nread);
+    }
+
+    delete[] buf->base;
 }
 
 void Session::on_write(uv_write_t* req, int status) {
     auto session = static_cast<Session*>(req->data);
-    
-    if (status < 0) {
-        spdlog::error("Write error on session {}: {}", session->id_, uv_strerror(status));
-        session->stop();
-    }
-
-    delete[] req->bufs[0].base;
-    delete req->bufs;
     delete req;
+
+    if (status < 0) {
+        spdlog::error("写入错误: {}", uv_strerror(status));
+        session->close();
+    }
 }
 
 void Session::on_close(uv_handle_t* handle) {
@@ -112,28 +158,39 @@ void Session::on_close(uv_handle_t* handle) {
     if (session->close_handler_) {
         session->close_handler_();
     }
-    delete session;
+    // 不要直接删除 session，因为它可能被 shared_ptr 管理
+}
+
+void Session::append_to_buffer(const char* data, size_t len) {
+    read_buffer_.insert(read_buffer_.end(), data, data + len);
+    process_buffer();
 }
 
 void Session::process_buffer() {
-    while (message_buffer_.size() >= Message::HEADER_SIZE) {
-        auto msg = Message::deserialize(message_buffer_);
-        if (!msg) {
-            // Not enough data for a complete message
+    // 处理完整的消息
+    while (read_buffer_.size() >= sizeof(MessageHeader)) {
+        auto header = reinterpret_cast<const MessageHeader*>(read_buffer_.data());
+        size_t message_size = sizeof(MessageHeader) + header->length;
+        
+        if (read_buffer_.size() < message_size) {
             break;
         }
-
-        // Remove processed data from buffer
-        message_buffer_.erase(message_buffer_.begin(),
-                            message_buffer_.begin() + Message::HEADER_SIZE + msg->length);
-
-        handle_message(msg);
-    }
-}
-
-void Session::handle_message(std::shared_ptr<Message> message) {
-    if (message_handler_) {
-        message_handler_(message);
+        
+        // 解析消息
+        auto message = std::make_shared<Message>();
+        if (!message->deserialize(read_buffer_.data(), message_size)) {
+            spdlog::error("消息解析失败");
+            read_buffer_.clear();
+            return;
+        }
+        
+        // 调用消息处理回调
+        if (message_handler_) {
+            message_handler_(message);
+        }
+        
+        // 移除已处理的数据
+        read_buffer_.erase(read_buffer_.begin(), read_buffer_.begin() + message_size);
     }
 }
 

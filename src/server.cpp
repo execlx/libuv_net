@@ -1,131 +1,108 @@
 #include "libuv_net/server.hpp"
+#include "libuv_net/session.hpp"
 #include <spdlog/spdlog.h>
 #include <cstring>
+#include <sstream>
+#include <iomanip>
 
 namespace libuv_net {
 
-Server::Server() {
-    loop_ = uv_default_loop();
-    thread_pool_ = std::make_unique<ThreadPool>();
+Server::Server(uv_loop_t* loop) : loop_(loop) {
+    // 初始化服务器套接字
+    uv_tcp_init(loop_, &server_);
+    server_.data = this;
 }
 
 Server::~Server() {
     stop();
 }
 
-bool Server::start(const std::string& host, uint16_t port) {
-    if (is_running_) {
-        spdlog::warn("Server is already running");
-        return false;
-    }
-
-    uv_tcp_init(loop_, &server_);
-    server_.data = this;
-
+void Server::start(const std::string& host, int port) {
+    // 解析地址
     struct sockaddr_in addr;
     uv_ip4_addr(host.c_str(), port, &addr);
 
-    int result = uv_tcp_bind(&server_, (const struct sockaddr*)&addr, 0);
+    // 绑定地址
+    int result = uv_tcp_bind(&server_, reinterpret_cast<const struct sockaddr*>(&addr), 0);
     if (result) {
-        spdlog::error("Bind error: {}", uv_strerror(result));
-        return false;
-    }
-
-    result = uv_listen((uv_stream_t*)&server_, 128, on_new_connection);
-    if (result) {
-        spdlog::error("Listen error: {}", uv_strerror(result));
-        return false;
-    }
-
-    is_running_ = true;
-    spdlog::info("Server started on {}:{}", host, port);
-    return true;
-}
-
-void Server::stop() {
-    if (!is_running_) {
+        spdlog::error("绑定地址失败: {}", uv_strerror(result));
         return;
     }
 
-    is_running_ = false;
-
-    // Close all sessions
-    {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
-        for (auto& pair : sessions_) {
-            pair.second->stop();
-        }
-        sessions_.clear();
+    // 开始监听
+    result = uv_listen(reinterpret_cast<uv_stream_t*>(&server_), 128, on_connection);
+    if (result) {
+        spdlog::error("监听失败: {}", uv_strerror(result));
+        return;
     }
 
-    // Close server
-    uv_close((uv_handle_t*)&server_, on_close);
+    spdlog::info("服务器启动成功: {}:{}", host, port);
+}
+
+void Server::stop() {
+    if (!uv_is_closing(reinterpret_cast<uv_handle_t*>(&server_))) {
+        uv_close(reinterpret_cast<uv_handle_t*>(&server_), on_close);
+    }
 }
 
 void Server::broadcast(std::shared_ptr<Message> message) {
-    std::lock_guard<std::mutex> lock(sessions_mutex_);
-    for (auto& pair : sessions_) {
-        pair.second->send(message);
+    for (const auto& session : sessions_) {
+        session->send(message);
     }
 }
 
 void Server::send_to(const std::string& session_id, std::shared_ptr<Message> message) {
-    std::lock_guard<std::mutex> lock(sessions_mutex_);
-    auto it = sessions_.find(session_id);
+    auto it = std::find_if(sessions_.begin(), sessions_.end(),
+                          [&session_id](const auto& session) {
+                              return session->id() == session_id;
+                          });
     if (it != sessions_.end()) {
-        it->second->send(message);
+        (*it)->send(message);
     }
 }
 
-void Server::on_new_connection(uv_stream_t* server, int status) {
+void Server::on_connection(uv_stream_t* server, int status) {
+    auto self = static_cast<Server*>(server->data);
     if (status < 0) {
-        spdlog::error("New connection error: {}", uv_strerror(status));
+        spdlog::error("连接错误: {}", uv_strerror(status));
         return;
     }
 
-    auto srv = static_cast<Server*>(server->data);
-    auto client = new uv_tcp_t;
-    uv_tcp_init(srv->loop_, client);
-    
-    if (uv_accept(server, (uv_stream_t*)client) == 0) {
-        srv->handle_new_session(client);
-    } else {
-        uv_close((uv_handle_t*)client, nullptr);
+    // 创建新的会话
+    auto session = std::make_shared<Session>(self->loop_, reinterpret_cast<uv_tcp_t*>(server));
+    self->sessions_.push_back(session);
+
+    // 设置消息处理回调
+    session->set_message_handler([self](std::shared_ptr<Message> message) {
+        if (self->message_handler_) {
+            self->message_handler_(message);
+        }
+    });
+
+    // 设置关闭处理回调
+    session->set_close_handler([self, session]() {
+        self->sessions_.erase(
+            std::remove(self->sessions_.begin(), self->sessions_.end(), session),
+            self->sessions_.end()
+        );
+        if (self->close_handler_) {
+            self->close_handler_(session);
+        }
+    });
+
+    // 启动会话
+    session->start();
+
+    // 调用连接处理回调
+    if (self->connect_handler_) {
+        self->connect_handler_(session);
     }
 }
 
 void Server::on_close(uv_handle_t* handle) {
-    delete handle;
-}
-
-void Server::handle_new_session(uv_tcp_t* client) {
-    auto session = std::make_shared<Session>(loop_, client);
-    
-    session->set_message_handler([this, session](std::shared_ptr<Message> message) {
-        if (message_handler_) {
-            message_handler_(session, message);
-        }
-    });
-
-    session->set_close_handler([this, session]() {
-        handle_session_close(session->get_id());
-    });
-
-    {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
-        sessions_[session->get_id()] = session;
-    }
-
-    if (session_handler_) {
-        session_handler_(session);
-    }
-
-    session->start();
-}
-
-void Server::handle_session_close(const std::string& session_id) {
-    std::lock_guard<std::mutex> lock(sessions_mutex_);
-    sessions_.erase(session_id);
+    auto server = static_cast<Server*>(handle->data);
+    // 服务器关闭时不需要调用 close_handler_，因为它需要一个 Session 参数
+    // 如果需要通知服务器关闭，可以添加一个新的回调类型
 }
 
 } // namespace libuv_net 

@@ -49,6 +49,9 @@ public:
         return result;
     }
 
+    // 直接提交无返回值的任务
+    void enqueue(std::function<void()> task);
+
     // 获取线程池大小
     size_t size() const { return threads_.size(); }
     // 检查线程池是否已停止
