@@ -60,13 +60,23 @@ int main()
         is_connected = false;
         should_exit = true; });
 
-    // 设置消息回调
-    client->set_message_handler([&](std::shared_ptr<Message> message)
-                                {
-        if (message->type() == MessageType::TEXT) {
-            std::string text(message->data().begin(), message->data().end());
-            spdlog::info("收到消息: {}", text);
-        } });
+    // 设置文本消息处理器
+    client->set_packet_handler(PacketType::TEXT, [&](std::shared_ptr<Packet> packet)
+                               {
+        std::string text(packet->data().begin(), packet->data().end());
+        spdlog::info("收到文本消息: {}", text); });
+
+    // 设置二进制消息处理器
+    client->set_packet_handler(PacketType::BINARY, [&](std::shared_ptr<Packet> packet)
+                               { spdlog::info("收到二进制消息，长度: {}", packet->data().size()); });
+
+    // 设置心跳消息处理器
+    client->set_packet_handler(PacketType::HEARTBEAT, [&](std::shared_ptr<Packet> packet)
+                               { spdlog::debug("收到心跳包"); });
+
+    // 设置默认消息处理器
+    client->set_default_packet_handler([&](std::shared_ptr<Packet> packet)
+                                       { spdlog::warn("收到未知类型消息: {}", static_cast<int>(packet->type())); });
 
     // 启动事件循环
     if (!client->start())
@@ -112,8 +122,8 @@ int main()
             std::vector<uint8_t> data(input.begin(), input.end());
             data.push_back('\0'); // 添加字符串结束符
 
-            auto message = std::make_shared<Message>(MessageType::TEXT, data);
-            client->send(message);
+            auto packet = std::make_shared<Packet>(PacketType::TEXT, data);
+            client->send(packet);
             spdlog::info("已发送消息: {}", input);
         }
     }

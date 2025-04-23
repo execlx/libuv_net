@@ -19,6 +19,10 @@ namespace libuv_net
             throw std::runtime_error("创建事件循环失败");
         }
         thread_pool_ = std::make_unique<ThreadPool>();
+
+        // 初始化心跳定时器
+        uv_timer_init(loop_, &heartbeat_timer_);
+        heartbeat_timer_.data = this;
     }
 
     Client::~Client()
@@ -59,6 +63,7 @@ namespace libuv_net
 
         should_stop_ = true;
         loop_thread_.join();
+        stop_heartbeat();
     }
 
     bool Client::connect(const std::string &host, uint16_t port)
@@ -116,10 +121,11 @@ namespace libuv_net
 
         is_connected_ = false;
         is_connecting_ = false;
+        stop_heartbeat();
         spdlog::info("客户端已断开连接");
     }
 
-    void Client::send(std::shared_ptr<Message> message)
+    void Client::send(std::shared_ptr<Packet> packet)
     {
         if (!is_connected_)
         {
@@ -128,7 +134,7 @@ namespace libuv_net
         }
 
         // 序列化消息
-        auto data = message->serialize();
+        auto data = packet->serialize();
         auto write_req = new uv_write_t;
         write_req->data = this;
 
@@ -173,6 +179,7 @@ namespace libuv_net
 
         client->is_connected_ = true;
         client->is_connecting_ = false;
+        client->start_heartbeat();
         spdlog::info("连接成功");
 
         // 调用连接回调
@@ -187,6 +194,7 @@ namespace libuv_net
         auto client = static_cast<Client *>(handle->data);
         client->is_connected_ = false;
         client->is_connecting_ = false;
+        client->stop_heartbeat();
 
         // 调用断开连接回调
         if (client->disconnect_handler_)
@@ -230,6 +238,27 @@ namespace libuv_net
         }
     }
 
+    void Client::on_heartbeat_timer(uv_timer_t *handle)
+    {
+        auto client = static_cast<Client *>(handle->data);
+
+        // 检查心跳超时
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - client->last_heartbeat_time_)
+                           .count();
+
+        if (elapsed > HEARTBEAT_TIMEOUT_MS)
+        {
+            spdlog::warn("心跳超时，断开连接");
+            client->disconnect();
+            return;
+        }
+
+        // 发送心跳包
+        client->send_heartbeat();
+    }
+
     bool Client::init_socket()
     {
         // 检查套接字状态
@@ -259,10 +288,10 @@ namespace libuv_net
         buffer_.insert(buffer_.end(), data, data + len);
 
         // 处理完整的消息
-        while (buffer_.size() >= sizeof(MessageHeader))
+        while (buffer_.size() >= sizeof(PacketHeader))
         {
-            auto header = reinterpret_cast<const MessageHeader *>(buffer_.data());
-            size_t message_size = sizeof(MessageHeader) + header->length;
+            const PacketHeader *header = reinterpret_cast<const PacketHeader *>(buffer_.data());
+            size_t message_size = sizeof(PacketHeader) + header->length;
 
             if (buffer_.size() < message_size)
             {
@@ -270,23 +299,54 @@ namespace libuv_net
             }
 
             // 解析消息
-            auto message = std::make_shared<Message>();
-            if (!message->deserialize(buffer_.data(), message_size))
+            auto packet = std::make_shared<Packet>();
+            if (!packet->deserialize(buffer_.data(), message_size))
             {
                 spdlog::error("消息解析失败");
                 buffer_.clear();
                 return;
             }
 
-            // 调用消息处理回调
-            if (message_handler_)
+            // 处理心跳包
+            if (packet->type() == PacketType::HEARTBEAT)
             {
-                message_handler_(message);
+                last_heartbeat_time_ = std::chrono::steady_clock::now();
+                buffer_.erase(buffer_.begin(), buffer_.begin() + message_size);
+                continue;
+            }
+
+            // 查找对应的处理器
+            auto it = packet_handlers_.find(packet->type());
+            if (it != packet_handlers_.end())
+            {
+                it->second(packet);
+            }
+            else if (default_packet_handler_)
+            {
+                default_packet_handler_(packet);
             }
 
             // 移除已处理的数据
             buffer_.erase(buffer_.begin(), buffer_.begin() + message_size);
         }
+    }
+
+    void Client::start_heartbeat()
+    {
+        last_heartbeat_time_ = std::chrono::steady_clock::now();
+        uv_timer_start(&heartbeat_timer_, on_heartbeat_timer,
+                       HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS);
+    }
+
+    void Client::stop_heartbeat()
+    {
+        uv_timer_stop(&heartbeat_timer_);
+    }
+
+    void Client::send_heartbeat()
+    {
+        auto packet = std::make_shared<Packet>(PacketType::HEARTBEAT, std::vector<uint8_t>());
+        send(packet);
     }
 
 } // namespace libuv_net

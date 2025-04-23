@@ -8,6 +8,7 @@
 #include "libuv_net/session.hpp"
 #include "libuv_net/thread_pool.hpp"
 #include <iostream>
+#include <map>
 
 namespace libuv_net
 {
@@ -20,13 +21,14 @@ namespace libuv_net
      * - 管理多个客户端会话
      * - 广播消息
      * - 发送消息到指定会话
+     * - 心跳检测
      */
     class Server
     {
     public:
         // 回调函数类型定义
-        using SessionHandler = std::function<void(std::shared_ptr<Session>)>; // 会话处理回调
-        using MessageHandler = std::function<void(std::shared_ptr<Message>)>; // 消息处理回调
+        using SessionHandler = std::function<void(std::shared_ptr<Session>)>;                         // 会话处理回调
+        using PacketHandler = std::function<void(std::shared_ptr<Session>, std::shared_ptr<Packet>)>; // 消息处理回调
 
         Server();
         ~Server();
@@ -72,22 +74,35 @@ namespace libuv_net
 
         /**
          * @brief 设置消息处理回调
+         * @param type 消息类型
          * @param handler 回调函数
          */
-        void set_message_handler(MessageHandler handler) { message_handler_ = std::move(handler); }
+        void set_packet_handler(PacketType type, PacketHandler handler)
+        {
+            packet_handlers_[type] = std::move(handler);
+        }
+
+        /**
+         * @brief 设置默认消息处理回调
+         * @param handler 回调函数
+         */
+        void set_default_packet_handler(PacketHandler handler)
+        {
+            default_packet_handler_ = std::move(handler);
+        }
 
         /**
          * @brief 广播消息到所有会话
-         * @param message 要广播的消息
+         * @param packet 要广播的消息
          */
-        void broadcast(std::shared_ptr<Message> message);
+        void broadcast(std::shared_ptr<Packet> packet);
 
         /**
          * @brief 发送消息到指定会话
          * @param session_id 会话ID
-         * @param message 要发送的消息
+         * @param packet 要发送的消息
          */
-        void send_to(const std::string &session_id, std::shared_ptr<Message> message);
+        void send_to(const std::string &session_id, std::shared_ptr<Packet> packet);
 
     private:
         // libuv 回调函数
@@ -111,9 +126,10 @@ namespace libuv_net
         std::mutex sessions_mutex_;                      // 会话映射表互斥锁
 
         // 回调函数
-        SessionHandler connect_handler_; // 连接处理回调
-        SessionHandler close_handler_;   // 关闭处理回调
-        MessageHandler message_handler_; // 消息处理回调
+        SessionHandler connect_handler_;                      // 连接处理回调
+        SessionHandler close_handler_;                        // 关闭处理回调
+        std::map<PacketType, PacketHandler> packet_handlers_; // 消息处理回调
+        PacketHandler default_packet_handler_;                // 默认消息处理回调
 
         bool is_listening_{false}; // 服务器是否正在监听
     };

@@ -116,15 +116,15 @@ namespace libuv_net
         spdlog::info("服务器已停止监听");
     }
 
-    void Server::broadcast(std::shared_ptr<Message> message)
+    void Server::broadcast(std::shared_ptr<Packet> packet)
     {
         for (const auto &session : sessions_)
         {
-            session->send(message);
+            session->send(packet);
         }
     }
 
-    void Server::send_to(const std::string &session_id, std::shared_ptr<Message> message)
+    void Server::send_to(const std::string &session_id, std::shared_ptr<Packet> packet)
     {
         auto it = std::find_if(sessions_.begin(), sessions_.end(),
                                [&session_id](const auto &session)
@@ -133,7 +133,7 @@ namespace libuv_net
                                });
         if (it != sessions_.end())
         {
-            (*it)->send(message);
+            (*it)->send(packet);
         }
     }
 
@@ -151,22 +151,35 @@ namespace libuv_net
         self->sessions_.push_back(session);
 
         // 设置消息处理回调
-        session->set_message_handler([self](std::shared_ptr<Message> message)
-                                     {
-        if (self->message_handler_) {
-            self->message_handler_(message);
-        } });
+        session->set_packet_handler(PacketType::HEARTBEAT, [](std::shared_ptr<Packet> packet)
+                                    {
+                                        // 心跳包由 Session 类内部处理
+                                    });
+
+        // 设置默认消息处理回调
+        session->set_default_packet_handler([self, session](std::shared_ptr<Packet> packet)
+                                            {
+            // 查找对应的处理器
+            auto it = self->packet_handlers_.find(packet->type());
+            if (it != self->packet_handlers_.end())
+            {
+                it->second(session, packet);
+            }
+            else if (self->default_packet_handler_)
+            {
+                self->default_packet_handler_(session, packet);
+            } });
 
         // 设置关闭处理回调
         session->set_close_handler([self, session]()
                                    {
-        self->sessions_.erase(
-            std::remove(self->sessions_.begin(), self->sessions_.end(), session),
-            self->sessions_.end()
-        );
-        if (self->close_handler_) {
-            self->close_handler_(session);
-        } });
+            self->sessions_.erase(
+                std::remove(self->sessions_.begin(), self->sessions_.end(), session),
+                self->sessions_.end()
+            );
+            if (self->close_handler_) {
+                self->close_handler_(session);
+            } });
 
         // 启动会话
         session->start();
@@ -192,10 +205,23 @@ namespace libuv_net
         sessions_.push_back(session);
 
         // 设置消息处理回调
-        session->set_message_handler([this](std::shared_ptr<Message> message)
-                                     {
-            if (message_handler_) {
-                message_handler_(message);
+        session->set_packet_handler(PacketType::HEARTBEAT, [](std::shared_ptr<Packet> packet)
+                                    {
+                                        // 心跳包由 Session 类内部处理
+                                    });
+
+        // 设置默认消息处理回调
+        session->set_default_packet_handler([this, session](std::shared_ptr<Packet> packet)
+                                            {
+            // 查找对应的处理器
+            auto it = packet_handlers_.find(packet->type());
+            if (it != packet_handlers_.end())
+            {
+                it->second(session, packet);
+            }
+            else if (default_packet_handler_)
+            {
+                default_packet_handler_(session, packet);
             } });
 
         // 设置关闭处理回调
