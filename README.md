@@ -29,7 +29,7 @@
 ```bash
 mkdir build
 cd build
-cmake ..
+cmake .. -DCMAKE_TOOLCHAIN_FILE=C:/Users/minxi/Documents/vcpkg/scripts/buildsystems/vcpkg.cmake
 make
 ```
 
