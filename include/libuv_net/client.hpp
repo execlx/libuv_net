@@ -20,6 +20,7 @@ namespace libuv_net
      * - 发送和接收消息
      * - 自动重连
      * - 心跳检测
+     * - 数据格式拦截器
      */
     class Client
     {
@@ -67,6 +68,23 @@ namespace libuv_net
         void send(std::shared_ptr<Packet> packet);
 
         /**
+         * @brief 发送数据到服务器（使用拦截器）
+         * @param type 消息类型
+         * @param data 要发送的数据
+         */
+        template <typename T>
+        void send_data(PacketType type, const T &data)
+        {
+            auto interceptor = interceptor_manager_.get_interceptor(type);
+            if (interceptor)
+            {
+                auto serialized_data = interceptor->serialize(data);
+                auto packet = std::make_shared<Packet>(type, serialized_data);
+                send(packet);
+            }
+        }
+
+        /**
          * @brief 设置连接回调
          * @param handler 回调函数
          */
@@ -95,6 +113,15 @@ namespace libuv_net
         void set_default_packet_handler(PacketHandler handler)
         {
             default_packet_handler_ = std::move(handler);
+        }
+
+        /**
+         * @brief 添加拦截器
+         * @param interceptor 拦截器
+         */
+        void add_interceptor(std::shared_ptr<Interceptor> interceptor)
+        {
+            interceptor_manager_.add_interceptor(std::move(interceptor));
         }
 
         /**
@@ -140,6 +167,9 @@ namespace libuv_net
         DisconnectHandler disconnect_handler_;                // 断开连接回调
         std::map<PacketType, PacketHandler> packet_handlers_; // 消息处理回调
         PacketHandler default_packet_handler_;                // 默认消息处理回调
+
+        // 拦截器管理器
+        InterceptorManager interceptor_manager_;
 
         // 缓冲区
         std::vector<uint8_t> buffer_; // 接收缓冲区

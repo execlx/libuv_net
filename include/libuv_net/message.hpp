@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <memory>
 #include <functional>
+#include <string>
+#include <any>
+#include <map>
 
 namespace libuv_net
 {
@@ -13,11 +16,13 @@ namespace libuv_net
     // 消息类型枚举
     enum class PacketType : uint8_t
     {
-        TEXT = 0,     // 文本消息
-        BINARY = 1,   // 二进制消息
-        PING = 2,     // 心跳请求
-        PONG = 3,     // 心跳响应
-        HEARTBEAT = 4 // 心跳包
+        TEXT = 0,      // 文本消息
+        BINARY = 1,    // 二进制消息
+        PING = 2,      // 心跳请求
+        PONG = 3,      // 心跳响应
+        HEARTBEAT = 4, // 心跳包
+        JSON = 5,      // JSON消息
+        PROTOBUF = 6   // Protobuf消息
     };
 
     // 消息头结构
@@ -32,6 +37,22 @@ namespace libuv_net
     // 心跳相关常量
     constexpr int HEARTBEAT_INTERVAL_MS = 30000; // 30秒
     constexpr int HEARTBEAT_TIMEOUT_MS = 90000;  // 90秒
+
+    // 拦截器接口
+    class Interceptor
+    {
+    public:
+        virtual ~Interceptor() = default;
+
+        // 序列化数据
+        virtual std::vector<uint8_t> serialize(const std::any &data) = 0;
+
+        // 反序列化数据
+        virtual std::any deserialize(const std::vector<uint8_t> &data) = 0;
+
+        // 获取支持的消息类型
+        virtual PacketType get_type() const = 0;
+    };
 
     /**
      * @brief 数据包类
@@ -133,5 +154,52 @@ namespace libuv_net
 
     // 数据包处理回调函数类型
     using PacketHandler = std::function<void(std::shared_ptr<Packet>)>;
+
+    // 拦截器管理类
+    class InterceptorManager
+    {
+    public:
+        // 添加拦截器
+        void add_interceptor(std::shared_ptr<Interceptor> interceptor)
+        {
+            interceptors_[interceptor->get_type()] = std::move(interceptor);
+        }
+
+        // 获取拦截器
+        std::shared_ptr<Interceptor> get_interceptor(PacketType type)
+        {
+            auto it = interceptors_.find(type);
+            if (it != interceptors_.end())
+            {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        // 序列化数据
+        std::vector<uint8_t> serialize(PacketType type, const std::any &data)
+        {
+            auto interceptor = get_interceptor(type);
+            if (interceptor)
+            {
+                return interceptor->serialize(data);
+            }
+            return std::vector<uint8_t>();
+        }
+
+        // 反序列化数据
+        std::any deserialize(PacketType type, const std::vector<uint8_t> &data)
+        {
+            auto interceptor = get_interceptor(type);
+            if (interceptor)
+            {
+                return interceptor->deserialize(data);
+            }
+            return std::any();
+        }
+
+    private:
+        std::map<PacketType, std::shared_ptr<Interceptor>> interceptors_;
+    };
 
 } // namespace libuv_net

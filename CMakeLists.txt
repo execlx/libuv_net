@@ -5,6 +5,12 @@ project(libuv_net VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 设置 vcpkg 工具链文件
+if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE STRING "")
+endif()
+
 # Windows 特定设置
 if(WIN32)
     # 添加 Windows 特定的定义
@@ -26,10 +32,12 @@ else()
 endif()
 
 # 查找必要的包
-find_package(fmt REQUIRED)
-find_package(spdlog REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 find_package(Threads REQUIRED)
-find_package(libuv REQUIRED)
+find_package(libuv CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
 
 # 添加头文件目录
 include_directories(
@@ -44,9 +52,20 @@ set(SOURCES
     src/thread_pool.cpp
 )
 
+# 添加头文件
+set(HEADERS
+    include/libuv_net/client.hpp
+    include/libuv_net/server.hpp
+    include/libuv_net/session.hpp
+    include/libuv_net/thread_pool.hpp
+    include/libuv_net/message.hpp
+    include/libuv_net/json_interceptor.hpp
+    include/libuv_net/protobuf_interceptor.hpp
+)
+
 # 创建库
 if(WIN32)
-    add_library(libuv_net SHARED ${SOURCES})
+    add_library(libuv_net SHARED ${SOURCES} ${HEADERS})
     set_target_properties(libuv_net PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Debug"
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Debug"
@@ -56,7 +75,7 @@ if(WIN32)
         WINDOWS_EXPORT_ALL_SYMBOLS ON
     )
 else()
-    add_library(libuv_net SHARED ${SOURCES})
+    add_library(libuv_net SHARED ${SOURCES} ${HEADERS})
 endif()
 
 # 链接库
@@ -66,6 +85,8 @@ target_link_libraries(libuv_net
     spdlog::spdlog
     libuv::uv
     Threads::Threads
+    nlohmann_json::nlohmann_json
+    protobuf::libprotobuf
 )
 
 # Windows 特定链接
@@ -82,6 +103,8 @@ target_link_libraries(client_test
     spdlog::spdlog
     libuv::uv
     Threads::Threads
+    nlohmann_json::nlohmann_json
+    protobuf::libprotobuf
 )
 
 add_executable(server_test tests/server_test.cpp)
@@ -92,6 +115,8 @@ target_link_libraries(server_test
     spdlog::spdlog
     libuv::uv
     Threads::Threads
+    nlohmann_json::nlohmann_json
+    protobuf::libprotobuf
 )
 
 # 安装
@@ -105,6 +130,7 @@ install(TARGETS libuv_net
 
 install(DIRECTORY include/
     DESTINATION include
+    FILES_MATCHING PATTERN "*.hpp"
 )
 
 install(EXPORT libuv_netTargets

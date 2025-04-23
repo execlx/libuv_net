@@ -21,6 +21,7 @@ namespace libuv_net
      * - 连接状态管理
      * - 错误处理
      * - 心跳检测
+     * - 数据格式拦截器
      */
     class Session : public std::enable_shared_from_this<Session>
     {
@@ -79,6 +80,19 @@ namespace libuv_net
         // 发送消息
         void send(std::shared_ptr<Packet> packet);
 
+        // 发送数据（使用拦截器）
+        template <typename T>
+        void send_data(PacketType type, const T &data)
+        {
+            auto interceptor = interceptor_manager_.get_interceptor(type);
+            if (interceptor)
+            {
+                auto serialized_data = interceptor->serialize(data);
+                auto packet = std::make_shared<Packet>(type, serialized_data);
+                send(packet);
+            }
+        }
+
         // 获取底层 socket
         uv_tcp_t &get_socket() { return socket_; }
 
@@ -104,6 +118,12 @@ namespace libuv_net
 
         // 处理接收到的数据
         void append_to_buffer(const char *data, size_t len);
+
+        // 添加拦截器
+        void add_interceptor(std::shared_ptr<Interceptor> interceptor)
+        {
+            interceptor_manager_.add_interceptor(std::move(interceptor));
+        }
 
     private:
         static void on_alloc(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
@@ -140,6 +160,9 @@ namespace libuv_net
         // 消息处理回调
         std::map<PacketType, PacketHandler> packet_handlers_;
         PacketHandler default_packet_handler_;
+
+        // 拦截器管理器
+        InterceptorManager interceptor_manager_;
 
         // 心跳相关
         uv_timer_t heartbeat_timer_;

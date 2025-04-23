@@ -307,23 +307,37 @@ namespace libuv_net
                 return;
             }
 
-            // 处理心跳包
-            if (packet->type() == PacketType::HEARTBEAT)
+            // 使用拦截器处理数据
+            auto interceptor = interceptor_manager_.get_interceptor(packet->type());
+            if (interceptor)
             {
-                last_heartbeat_time_ = std::chrono::steady_clock::now();
-                buffer_.erase(buffer_.begin(), buffer_.begin() + message_size);
-                continue;
+                auto data = interceptor->deserialize(packet->data());
+                if (data.has_value())
+                {
+                    // 查找对应的处理器
+                    auto it = packet_handlers_.find(packet->type());
+                    if (it != packet_handlers_.end())
+                    {
+                        it->second(packet);
+                    }
+                    else if (default_packet_handler_)
+                    {
+                        default_packet_handler_(packet);
+                    }
+                }
             }
-
-            // 查找对应的处理器
-            auto it = packet_handlers_.find(packet->type());
-            if (it != packet_handlers_.end())
+            else
             {
-                it->second(packet);
-            }
-            else if (default_packet_handler_)
-            {
-                default_packet_handler_(packet);
+                // 查找对应的处理器
+                auto it = packet_handlers_.find(packet->type());
+                if (it != packet_handlers_.end())
+                {
+                    it->second(packet);
+                }
+                else if (default_packet_handler_)
+                {
+                    default_packet_handler_(packet);
+                }
             }
 
             // 移除已处理的数据

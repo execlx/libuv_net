@@ -1,9 +1,12 @@
 #include <iostream>
 #include "libuv_net/client.hpp"
+#include "libuv_net/json_interceptor.hpp"
+#include "libuv_net/protobuf_interceptor.hpp"
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <chrono>
 #include <string>
+#include <nlohmann/json.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -47,6 +50,10 @@ int main()
     bool should_exit = false;
     bool is_connected = false;
 
+    // 添加拦截器
+    client->add_interceptor(std::make_shared<JsonInterceptor>());
+    client->add_interceptor(std::make_shared<ProtobufInterceptor>());
+
     // 设置连接回调
     client->set_connect_handler([&]()
                                 {
@@ -65,6 +72,16 @@ int main()
                                {
         std::string text(packet->data().begin(), packet->data().end());
         spdlog::info("收到文本消息: {}", text); });
+
+    // 设置JSON消息处理器
+    client->set_packet_handler(PacketType::JSON, [&](std::shared_ptr<Packet> packet)
+                               {
+        auto interceptor = std::make_shared<JsonInterceptor>();
+        auto data = interceptor->deserialize(packet->data());
+        if (data.has_value()) {
+            auto json = std::any_cast<nlohmann::json>(data);
+            spdlog::info("收到JSON消息: {}", json.dump(4));
+        } });
 
     // 设置二进制消息处理器
     client->set_packet_handler(PacketType::BINARY, [&](std::shared_ptr<Packet> packet)
@@ -97,7 +114,7 @@ int main()
     std::string input;
     while (!should_exit)
     {
-        spdlog::info("请输入消息 (输入 'quit' 退出):");
+        spdlog::info("请输入消息类型 (text/json/binary/quit):");
         std::getline(std::cin, input);
 
         if (input == "quit")
@@ -105,26 +122,53 @@ int main()
             break;
         }
 
-        if (!input.empty())
+        if (input == "text")
         {
-            // 检查连接状态，如果断开则尝试重连
-            if (!client->is_connected())
+            spdlog::info("请输入文本消息:");
+            std::getline(std::cin, input);
+            if (!input.empty())
             {
-                spdlog::info("连接已断开，尝试重新连接...");
-                if (!try_connect(*client, "127.0.0.1", 8080))
+                std::vector<uint8_t> data(input.begin(), input.end());
+                data.push_back('\0');
+                auto packet = std::make_shared<Packet>(PacketType::TEXT, data);
+                client->send(packet);
+                spdlog::info("已发送文本消息: {}", input);
+            }
+        }
+        else if (input == "json")
+        {
+            spdlog::info("请输入JSON消息:");
+            std::getline(std::cin, input);
+            if (!input.empty())
+            {
+                try
                 {
-                    spdlog::error("重连失败，程序退出");
-                    break;
+                    auto json = nlohmann::json::parse(input);
+                    client->send_data(PacketType::JSON, json);
+                    spdlog::info("已发送JSON消息: {}", json.dump(4));
+                }
+                catch (const nlohmann::json::parse_error &e)
+                {
+                    spdlog::error("JSON解析失败: {}", e.what());
                 }
             }
-
-            // 将字符串转换为字节向量
-            std::vector<uint8_t> data(input.begin(), input.end());
-            data.push_back('\0'); // 添加字符串结束符
-
-            auto packet = std::make_shared<Packet>(PacketType::TEXT, data);
-            client->send(packet);
-            spdlog::info("已发送消息: {}", input);
+        }
+        else if (input == "binary")
+        {
+            spdlog::info("请输入二进制数据 (十六进制):");
+            std::getline(std::cin, input);
+            if (!input.empty())
+            {
+                std::vector<uint8_t> data;
+                for (size_t i = 0; i < input.length(); i += 2)
+                {
+                    std::string byte = input.substr(i, 2);
+                    data.push_back(static_cast<uint8_t>(std::stoi(byte, nullptr, 16)));
+                }
+                auto packet = std::make_shared<Packet>(PacketType::BINARY, data);
+                client->send(packet);
+                spdlog::info("已发送二进制消息，长度: {}", data.size());
+            }
         }
     }
 

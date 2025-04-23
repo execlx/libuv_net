@@ -281,6 +281,27 @@ namespace libuv_net
             return;
         }
 
+        // 使用拦截器处理数据
+        auto interceptor = interceptor_manager_.get_interceptor(packet->type());
+        if (interceptor)
+        {
+            auto data = interceptor->deserialize(packet->data());
+            if (data.has_value())
+            {
+                // 查找对应的处理器
+                auto it = packet_handlers_.find(packet->type());
+                if (it != packet_handlers_.end())
+                {
+                    it->second(packet);
+                }
+                else if (default_packet_handler_)
+                {
+                    default_packet_handler_(packet);
+                }
+            }
+            return;
+        }
+
         // 查找对应的处理器
         auto it = packet_handlers_.find(packet->type());
         if (it != packet_handlers_.end())
