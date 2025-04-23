@@ -28,7 +28,7 @@ namespace libuv_net
         using SessionHandler = std::function<void(std::shared_ptr<Session>)>; // 会话处理回调
         using MessageHandler = std::function<void(std::shared_ptr<Message>)>; // 消息处理回调
 
-        Server(uv_loop_t *loop);
+        Server();
         ~Server();
 
         // 禁用拷贝构造和赋值
@@ -36,16 +36,27 @@ namespace libuv_net
         Server &operator=(const Server &) = delete;
 
         /**
+         * @brief 启动事件循环
+         * @return 是否成功启动
+         */
+        bool start();
+
+        /**
+         * @brief 停止事件循环
+         */
+        void stop();
+
+        /**
          * @brief 启动服务器
          * @param host 监听主机名或 IP 地址
          * @param port 监听端口
          */
-        void start(const std::string &host, int port);
+        void listen(const std::string &host, int port);
 
         /**
          * @brief 停止服务器
          */
-        void stop();
+        void stop_listening();
 
         /**
          * @brief 设置连接处理回调
@@ -93,6 +104,8 @@ namespace libuv_net
         uv_loop_t *loop_;                         // libuv 事件循环
         uv_tcp_t server_;                         // TCP 服务器句柄
         std::unique_ptr<ThreadPool> thread_pool_; // 线程池
+        std::thread loop_thread_;                 // 事件循环线程
+        bool should_stop_{false};                 // 是否应该停止事件循环
 
         std::vector<std::shared_ptr<Session>> sessions_; // 会话列表
         std::mutex sessions_mutex_;                      // 会话映射表互斥锁
@@ -102,7 +115,7 @@ namespace libuv_net
         SessionHandler close_handler_;   // 关闭处理回调
         MessageHandler message_handler_; // 消息处理回调
 
-        bool is_running_{false}; // 服务器是否正在运行
+        bool is_listening_{false}; // 服务器是否正在监听
     };
 
 } // namespace libuv_net

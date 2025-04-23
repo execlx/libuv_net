@@ -14,8 +14,15 @@
 namespace libuv_net
 {
 
-    Server::Server(uv_loop_t *loop) : loop_(loop)
+    Server::Server()
     {
+        loop_ = uv_loop_new();
+        if (!loop_)
+        {
+            throw std::runtime_error("创建事件循环失败");
+        }
+        thread_pool_ = std::make_unique<ThreadPool>();
+
         // 初始化服务器套接字
         uv_tcp_init(loop_, &server_);
         server_.data = this;
@@ -23,11 +30,52 @@ namespace libuv_net
 
     Server::~Server()
     {
+        stop_listening();
         stop();
+        uv_loop_delete(loop_);
     }
 
-    void Server::start(const std::string &host, int port)
+    bool Server::start()
     {
+        if (loop_thread_.joinable())
+        {
+            spdlog::warn("事件循环已经在运行");
+            return false;
+        }
+
+        should_stop_ = false;
+        loop_thread_ = std::thread([this]()
+                                   {
+            spdlog::info("事件循环线程启动");
+            while (!should_stop_)
+            {
+                uv_run(loop_, UV_RUN_NOWAIT);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            spdlog::info("事件循环线程退出"); });
+
+        return true;
+    }
+
+    void Server::stop()
+    {
+        if (!loop_thread_.joinable())
+        {
+            return;
+        }
+
+        should_stop_ = true;
+        loop_thread_.join();
+    }
+
+    void Server::listen(const std::string &host, int port)
+    {
+        if (is_listening_)
+        {
+            spdlog::warn("服务器已经在监听");
+            return;
+        }
+
         // 解析地址
         struct sockaddr_in addr;
         uv_ip4_addr(host.c_str(), port, &addr);
@@ -48,15 +96,24 @@ namespace libuv_net
             return;
         }
 
+        is_listening_ = true;
         spdlog::info("服务器已启动，监听 {}:{}", host, port);
     }
 
-    void Server::stop()
+    void Server::stop_listening()
     {
+        if (!is_listening_)
+        {
+            return;
+        }
+
         if (!uv_is_closing(reinterpret_cast<uv_handle_t *>(&server_)))
         {
             uv_close(reinterpret_cast<uv_handle_t *>(&server_), on_close);
         }
+
+        is_listening_ = false;
+        spdlog::info("服务器已停止监听");
     }
 
     void Server::broadcast(std::shared_ptr<Message> message)

@@ -45,7 +45,19 @@ set(SOURCES
 )
 
 # 创建库
-add_library(libuv_net SHARED ${SOURCES})
+if(WIN32)
+    add_library(libuv_net SHARED ${SOURCES})
+    set_target_properties(libuv_net PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Debug"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Debug"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Debug"
+        PREFIX ""
+        IMPORT_PREFIX ""
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
+    )
+else()
+    add_library(libuv_net SHARED ${SOURCES})
+endif()
 
 # 链接库
 target_link_libraries(libuv_net

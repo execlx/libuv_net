@@ -13,27 +13,68 @@ namespace libuv_net
 
     Client::Client()
     {
-        loop_ = uv_default_loop();
+        loop_ = uv_loop_new();
+        if (!loop_)
+        {
+            throw std::runtime_error("创建事件循环失败");
+        }
         thread_pool_ = std::make_unique<ThreadPool>();
     }
 
     Client::~Client()
     {
+        stop();
         disconnect();
+        uv_loop_delete(loop_);
+    }
+
+    bool Client::start()
+    {
+        if (loop_thread_.joinable())
+        {
+            spdlog::warn("事件循环已经在运行");
+            return false;
+        }
+
+        should_stop_ = false;
+        loop_thread_ = std::thread([this]()
+                                   {
+            spdlog::info("事件循环线程启动");
+            while (!should_stop_)
+            {
+                uv_run(loop_, UV_RUN_NOWAIT);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            spdlog::info("事件循环线程退出"); });
+
+        return true;
+    }
+
+    void Client::stop()
+    {
+        if (!loop_thread_.joinable())
+        {
+            return;
+        }
+
+        should_stop_ = true;
+        loop_thread_.join();
     }
 
     bool Client::connect(const std::string &host, uint16_t port)
     {
         // 检查连接状态
-        if (is_connected_)
+        if (is_connected_ || is_connecting_)
         {
-            spdlog::warn("客户端已经连接");
+            spdlog::warn("客户端已经连接或正在连接");
             return false;
         }
 
         // 初始化套接字
-        uv_tcp_init(loop_, &socket_);
-        socket_.data = this;
+        if (!init_socket())
+        {
+            return false;
+        }
 
         // 解析地址
         struct sockaddr_in addr;
@@ -51,6 +92,7 @@ namespace libuv_net
         {
             spdlog::error("连接失败: {}", uv_strerror(result));
             delete connect_req;
+            is_connecting_ = false;
             return false;
         }
 
@@ -124,6 +166,7 @@ namespace libuv_net
         if (result)
         {
             spdlog::error("开始读取失败: {}", uv_strerror(result));
+            client->is_connecting_ = false;
             client->disconnect();
             return;
         }

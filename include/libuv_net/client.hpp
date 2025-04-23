@@ -35,6 +35,17 @@ namespace libuv_net
         Client &operator=(const Client &) = delete;
 
         /**
+         * @brief 启动事件循环
+         * @return 是否成功启动
+         */
+        bool start();
+
+        /**
+         * @brief 停止事件循环
+         */
+        void stop();
+
+        /**
          * @brief 连接到服务器
          * @param host 服务器主机名或 IP 地址
          * @param port 服务器端口
@@ -71,6 +82,18 @@ namespace libuv_net
          */
         void set_message_handler(MessageHandler handler) { message_handler_ = std::move(handler); }
 
+        /**
+         * @brief 检查是否已连接
+         * @return 是否已连接
+         */
+        bool is_connected() const { return is_connected_; }
+
+        /**
+         * @brief 检查是否正在连接
+         * @return 是否正在连接
+         */
+        bool is_connecting() const { return is_connecting_; }
+
     private:
         // libuv 回调函数
         static void on_connect(uv_connect_t *req, int status);
@@ -86,6 +109,8 @@ namespace libuv_net
         uv_loop_t *loop_;                         // libuv 事件循环
         uv_tcp_t socket_;                         // TCP 套接字
         std::unique_ptr<ThreadPool> thread_pool_; // 线程池
+        std::thread loop_thread_;                 // 事件循环线程
+        bool should_stop_{false};                 // 是否应该停止事件循环
 
         // 状态标志
         bool is_connected_{false};  // 是否已连接
