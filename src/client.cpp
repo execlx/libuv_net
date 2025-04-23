@@ -164,7 +164,7 @@ namespace libuv_net
 
         // 开始读取数据
         int result = uv_read_start((uv_stream_t *)&client->socket_,
-                                   [](uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf)
+                                   [](uv_handle_t * /*handle*/, size_t suggested_size, uv_buf_t *buf)
                                    {
                                        *buf = uv_buf_init(new char[suggested_size], suggested_size);
                                    },

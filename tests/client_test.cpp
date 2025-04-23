@@ -88,7 +88,7 @@ int main()
                                { spdlog::info("收到二进制消息，长度: {}", packet->data().size()); });
 
     // 设置心跳消息处理器
-    client->set_packet_handler(PacketType::HEARTBEAT, [&](std::shared_ptr<Packet> packet)
+    client->set_packet_handler(PacketType::HEARTBEAT, [&](std::shared_ptr<Packet> /*packet*/)
                                { spdlog::debug("收到心跳包"); });
 
     // 设置默认消息处理器

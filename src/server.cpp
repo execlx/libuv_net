@@ -151,7 +151,7 @@ namespace libuv_net
         self->sessions_.push_back(session);
 
         // 设置消息处理回调
-        session->set_packet_handler(PacketType::HEARTBEAT, [](std::shared_ptr<Packet> packet)
+        session->set_packet_handler(PacketType::HEARTBEAT, [](std::shared_ptr<Packet> /*packet*/)
                                     {
                                         // 心跳包由 Session 类内部处理
                                     });
@@ -191,9 +191,8 @@ namespace libuv_net
         }
     }
 
-    void Server::on_close(uv_handle_t *handle)
+    void Server::on_close(uv_handle_t * /*handle*/)
     {
-        auto server = static_cast<Server *>(handle->data);
         // 服务器关闭时不需要调用 close_handler_，因为它需要一个 Session 参数
         // 如果需要通知服务器关闭，可以添加一个新的回调类型
     }
@@ -205,7 +204,7 @@ namespace libuv_net
         sessions_.push_back(session);
 
         // 设置消息处理回调
-        session->set_packet_handler(PacketType::HEARTBEAT, [](std::shared_ptr<Packet> packet)
+        session->set_packet_handler(PacketType::HEARTBEAT, [](std::shared_ptr<Packet> /*packet*/)
                                     {
                                         // 心跳包由 Session 类内部处理
                                     });
@@ -273,9 +272,8 @@ namespace libuv_net
         session->append_to_buffer(buf->base, nread);
     }
 
-    uv_buf_t Server::on_alloc(uv_handle_t *handle, size_t suggested_size)
+    uv_buf_t Server::on_alloc(uv_handle_t * /*handle*/, size_t suggested_size)
     {
-        auto server = static_cast<Server *>(handle->data);
         return uv_buf_init(new char[suggested_size], suggested_size);
     }
 

@@ -25,19 +25,35 @@ endif()
 # 设置编译选项
 if(MSVC)
     add_compile_options(/W4)
-    # 移除 /WX 选项，允许警告
-    # add_compile_options(/WX)
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+    # 对于 Clang 或 AppleClang，禁用 gcc-compat 警告，并保持普通警告级别
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-Wall -Wextra -Wpedantic -Wno-gcc-compat -Wno-error=gcc-compat)
+    else()
+        add_compile_options(-Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 # 查找必要的包
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(Threads REQUIRED)
-find_package(libuv CONFIG REQUIRED)
+# 查找 JSON 库和 Protobuf
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
+# 查找 libuv，如果没有 CMake 配置则手动查找头文件和库
+find_path(LIBUV_INCLUDE_DIR NAMES uv.h)
+if(NOT LIBUV_INCLUDE_DIR)
+    message(FATAL_ERROR "libuv include directory not found")
+endif()
+
+find_library(LIBUV_LIBRARY NAMES uv)
+if(NOT LIBUV_LIBRARY)
+    message(FATAL_ERROR "libuv library not found")
+endif()
+
+# 添加 libuv 头文件目录
+include_directories(${LIBUV_INCLUDE_DIR})
 
 # 添加头文件目录
 include_directories(
@@ -83,7 +99,7 @@ target_link_libraries(libuv_net
     PRIVATE
     fmt::fmt
     spdlog::spdlog
-    libuv::uv
+    ${LIBUV_LIBRARY}
     Threads::Threads
     nlohmann_json::nlohmann_json
     protobuf::libprotobuf
@@ -101,7 +117,7 @@ target_link_libraries(client_test
     libuv_net
     fmt::fmt
     spdlog::spdlog
-    libuv::uv
+    ${LIBUV_LIBRARY}
     Threads::Threads
     nlohmann_json::nlohmann_json
     protobuf::libprotobuf
@@ -113,7 +129,7 @@ target_link_libraries(server_test
     libuv_net
     fmt::fmt
     spdlog::spdlog
-    libuv::uv
+    ${LIBUV_LIBRARY}
     Threads::Threads
     nlohmann_json::nlohmann_json
     protobuf::libprotobuf
